@@ -2472,7 +2472,7 @@ def is_typeddict(tp):
         >>> is_typeddict(dict)
         False
     """
-    return isinstance(tp, _TypedDictMeta)
+    return tp is not TypedDict and isinstance(tp, _TypedDictMeta)
 
 
 _ASSERT_NEVER_REPR_MAX_LENGTH = 100
@@ -3178,7 +3178,11 @@ class _TypedDictMeta(type):
         tp_dict.__total__ = total
         return tp_dict
 
-    __call__ = dict  # static method
+    def __call__(cls, *args, **kwargs):
+        if cls is TypedDict:
+            # Functional syntax, let `TypedDict.__new__` handle it:
+            return super().__call__(*args, **kwargs)
+        return dict(*args, **kwargs)
 
     def __subclasscheck__(cls, other):
         # Typed dicts are only for static structural subtyping.
@@ -3187,7 +3191,7 @@ class _TypedDictMeta(type):
     __instancecheck__ = __subclasscheck__
 
 
-def TypedDict(typename, fields=_sentinel, /, *, total=True):
+class TypedDict(metaclass=_TypedDictMeta):
     """A simple typed namespace. At runtime it is equivalent to a plain dict.
 
     TypedDict creates a dictionary type such that a type checker will expect all
@@ -3242,36 +3246,43 @@ def TypedDict(typename, fields=_sentinel, /, *, total=True):
             username: str      # the "username" key can be changed
 
     """
-    if fields is _sentinel or fields is None:
-        import warnings
 
-        if fields is _sentinel:
-            deprecated_thing = "Failing to pass a value for the 'fields' parameter"
-        else:
-            deprecated_thing = "Passing `None` as the 'fields' parameter"
+    def __new__(cls, typename, fields=_sentinel, /, *, total=True):
+        if fields is _sentinel or fields is None:
+            import warnings
 
-        example = f"`{typename} = TypedDict({typename!r}, {{{{}}}})`"
-        deprecation_msg = (
-            "{name} is deprecated and will be disallowed in Python {remove}. "
-            "To create a TypedDict class with 0 fields "
-            "using the functional syntax, "
-            "pass an empty dictionary, e.g. "
-        ) + example + "."
-        warnings._deprecated(deprecated_thing, message=deprecation_msg, remove=(3, 15))
-        fields = {}
+            if fields is _sentinel:
+                deprecated_thing = "Failing to pass a value for the 'fields' parameter"
+            else:
+                deprecated_thing = "Passing `None` as the 'fields' parameter"
 
-    ns = {'__annotations__': dict(fields)}
-    module = _caller()
-    if module is not None:
-        # Setting correct module is necessary to make typed dict classes pickleable.
-        ns['__module__'] = module
+            example = f"`{typename} = TypedDict({typename!r}, {{{{}}}})`"
+            deprecation_msg = (
+                "{name} is deprecated and will be disallowed in Python {remove}. "
+                "To create a TypedDict class with 0 fields "
+                "using the functional syntax, "
+                "pass an empty dictionary, e.g. "
+            ) + example + "."
+            warnings._deprecated(deprecated_thing, message=deprecation_msg, remove=(3, 15))
+            fields = {}
 
-    td = _TypedDictMeta(typename, (), ns, total=total)
-    td.__orig_bases__ = (TypedDict,)
-    return td
+        ns = {'__annotations__': dict(fields)}
+        module = _caller(depth=2)
+        if module is not None:
+            # Setting correct module is necessary to make typed dict classes pickleable.
+            ns['__module__'] = module
 
-_TypedDict = type.__new__(_TypedDictMeta, 'TypedDict', (), {})
-TypedDict.__mro_entries__ = lambda bases: (_TypedDict,)
+        td = _TypedDictMeta(typename, (), ns, total=total)
+        td.__orig_bases__ = (TypedDict,)
+        return td
+
+    def __class_getitem__(cls, args):
+        if not isinstance(args, tuple):
+            args = (args,)
+        if len(args) != 1 or not isinstance(args[0], dict):
+            raise TypeError("TypedDict[...] should be used with a single dict argument.")
+
+        return cls.__new__(cls, "<inlined TypedDict>", args[0])
 
 
 @_SpecialForm
