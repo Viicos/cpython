@@ -2432,6 +2432,10 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
         VISIT_SEQ_WITH_NULL(st, expr, e->v.Dict.keys);
         VISIT_SEQ(st, expr, e->v.Dict.values);
         break;
+    case DictInlineContext_kind:
+        VISIT_SEQ(st, expr, e->v.Dict.keys);
+        VISIT_SEQ(st, expr, e->v.Dict.values);
+        break;
     case Set_kind:
         VISIT_SEQ(st, expr, e->v.Set.elts);
         break;

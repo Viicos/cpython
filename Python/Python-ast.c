@@ -65,6 +65,7 @@ void _PyAST_Fini(PyInterpreterState *interp)
     Py_CLEAR(state->Del_type);
     Py_CLEAR(state->Delete_type);
     Py_CLEAR(state->DictComp_type);
+    Py_CLEAR(state->DictInlineContext_type);
     Py_CLEAR(state->Dict_type);
     Py_CLEAR(state->Div_singleton);
     Py_CLEAR(state->Div_type);
@@ -598,6 +599,10 @@ static const char * const DictComp_fields[]={
 static const char * const GeneratorExp_fields[]={
     "elt",
     "generators",
+};
+static const char * const DictInlineContext_fields[]={
+    "keys",
+    "values",
 };
 static const char * const Await_fields[]={
     "value",
@@ -2942,6 +2947,55 @@ add_ast_annotations(struct ast_state *state)
         return 0;
     }
     Py_DECREF(GeneratorExp_annotations);
+    PyObject *DictInlineContext_annotations = PyDict_New();
+    if (!DictInlineContext_annotations) return 0;
+    {
+        PyObject *type = state->expr_type;
+        type = Py_GenericAlias((PyObject *)&PyList_Type, type);
+        cond = type != NULL;
+        if (!cond) {
+            Py_DECREF(DictInlineContext_annotations);
+            return 0;
+        }
+        cond = PyDict_SetItemString(DictInlineContext_annotations, "keys",
+                                    type) == 0;
+        Py_DECREF(type);
+        if (!cond) {
+            Py_DECREF(DictInlineContext_annotations);
+            return 0;
+        }
+    }
+    {
+        PyObject *type = state->expr_type;
+        type = Py_GenericAlias((PyObject *)&PyList_Type, type);
+        cond = type != NULL;
+        if (!cond) {
+            Py_DECREF(DictInlineContext_annotations);
+            return 0;
+        }
+        cond = PyDict_SetItemString(DictInlineContext_annotations, "values",
+                                    type) == 0;
+        Py_DECREF(type);
+        if (!cond) {
+            Py_DECREF(DictInlineContext_annotations);
+            return 0;
+        }
+    }
+    cond = PyObject_SetAttrString(state->DictInlineContext_type,
+                                  "_field_types",
+                                  DictInlineContext_annotations) == 0;
+    if (!cond) {
+        Py_DECREF(DictInlineContext_annotations);
+        return 0;
+    }
+    cond = PyObject_SetAttrString(state->DictInlineContext_type,
+                                  "__annotations__",
+                                  DictInlineContext_annotations) == 0;
+    if (!cond) {
+        Py_DECREF(DictInlineContext_annotations);
+        return 0;
+    }
+    Py_DECREF(DictInlineContext_annotations);
     PyObject *Await_annotations = PyDict_New();
     if (!Await_annotations) return 0;
     {
@@ -6394,6 +6448,7 @@ init_types(void *arg)
         "     | SetComp(expr elt, comprehension* generators)\n"
         "     | DictComp(expr key, expr value, comprehension* generators)\n"
         "     | GeneratorExp(expr elt, comprehension* generators)\n"
+        "     | DictInlineContext(expr* keys, expr* values)\n"
         "     | Await(expr value)\n"
         "     | Yield(expr? value)\n"
         "     | YieldFrom(expr value)\n"
@@ -6467,6 +6522,11 @@ init_types(void *arg)
                                          2,
         "GeneratorExp(expr elt, comprehension* generators)");
     if (!state->GeneratorExp_type) return -1;
+    state->DictInlineContext_type = make_type(state, "DictInlineContext",
+                                              state->expr_type,
+                                              DictInlineContext_fields, 2,
+        "DictInlineContext(expr* keys, expr* values)");
+    if (!state->DictInlineContext_type) return -1;
     state->Await_type = make_type(state, "Await", state->expr_type,
                                   Await_fields, 1,
         "Await(expr value)");
@@ -8043,6 +8103,25 @@ _PyAST_GeneratorExp(expr_ty elt, asdl_comprehension_seq * generators, int
     p->kind = GeneratorExp_kind;
     p->v.GeneratorExp.elt = elt;
     p->v.GeneratorExp.generators = generators;
+    p->lineno = lineno;
+    p->col_offset = col_offset;
+    p->end_lineno = end_lineno;
+    p->end_col_offset = end_col_offset;
+    return p;
+}
+
+expr_ty
+_PyAST_DictInlineContext(asdl_expr_seq * keys, asdl_expr_seq * values, int
+                         lineno, int col_offset, int end_lineno, int
+                         end_col_offset, PyArena *arena)
+{
+    expr_ty p;
+    p = (expr_ty)_PyArena_Malloc(arena, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->kind = DictInlineContext_kind;
+    p->v.DictInlineContext.keys = keys;
+    p->v.DictInlineContext.values = values;
     p->lineno = lineno;
     p->col_offset = col_offset;
     p->end_lineno = end_lineno;
@@ -9769,6 +9848,23 @@ ast2obj_expr(struct ast_state *state, void* _o)
                              ast2obj_comprehension);
         if (!value) goto failed;
         if (PyObject_SetAttr(result, state->generators, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        break;
+    case DictInlineContext_kind:
+        tp = (PyTypeObject *)state->DictInlineContext_type;
+        result = PyType_GenericNew(tp, NULL, NULL);
+        if (!result) goto failed;
+        value = ast2obj_list(state, (asdl_seq*)o->v.DictInlineContext.keys,
+                             ast2obj_expr);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, state->keys, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(state, (asdl_seq*)o->v.DictInlineContext.values,
+                             ast2obj_expr);
+        if (!value) goto failed;
+        if (PyObject_SetAttr(result, state->values, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -14652,6 +14748,96 @@ obj2ast_expr(struct ast_state *state, PyObject* obj, expr_ty* out, PyArena*
         if (*out == NULL) goto failed;
         return 0;
     }
+    tp = state->DictInlineContext_type;
+    isinstance = PyObject_IsInstance(obj, tp);
+    if (isinstance == -1) {
+        return -1;
+    }
+    if (isinstance) {
+        asdl_expr_seq* keys;
+        asdl_expr_seq* values;
+
+        if (PyObject_GetOptionalAttr(obj, state->keys, &tmp) < 0) {
+            return -1;
+        }
+        if (tmp == NULL) {
+            tmp = PyList_New(0);
+            if (tmp == NULL) {
+                return -1;
+            }
+        }
+        {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "DictInlineContext field \"keys\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            keys = _Py_asdl_expr_seq_new(len, arena);
+            if (keys == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                expr_ty val;
+                PyObject *tmp2 = Py_NewRef(PyList_GET_ITEM(tmp, i));
+                if (_Py_EnterRecursiveCall(" while traversing 'DictInlineContext' node")) {
+                    goto failed;
+                }
+                res = obj2ast_expr(state, tmp2, &val, arena);
+                _Py_LeaveRecursiveCall();
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "DictInlineContext field \"keys\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(keys, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        if (PyObject_GetOptionalAttr(obj, state->values, &tmp) < 0) {
+            return -1;
+        }
+        if (tmp == NULL) {
+            tmp = PyList_New(0);
+            if (tmp == NULL) {
+                return -1;
+            }
+        }
+        {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "DictInlineContext field \"values\" must be a list, not a %.200s", _PyType_Name(Py_TYPE(tmp)));
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            values = _Py_asdl_expr_seq_new(len, arena);
+            if (values == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                expr_ty val;
+                PyObject *tmp2 = Py_NewRef(PyList_GET_ITEM(tmp, i));
+                if (_Py_EnterRecursiveCall(" while traversing 'DictInlineContext' node")) {
+                    goto failed;
+                }
+                res = obj2ast_expr(state, tmp2, &val, arena);
+                _Py_LeaveRecursiveCall();
+                Py_DECREF(tmp2);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "DictInlineContext field \"values\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(values, i, val);
+            }
+            Py_CLEAR(tmp);
+        }
+        *out = _PyAST_DictInlineContext(keys, values, lineno, col_offset,
+                                        end_lineno, end_col_offset, arena);
+        if (*out == NULL) goto failed;
+        return 0;
+    }
     tp = state->Await_type;
     isinstance = PyObject_IsInstance(obj, tp);
     if (isinstance == -1) {
@@ -18141,6 +18327,10 @@ astmodule_exec(PyObject *m)
     }
     if (PyModule_AddObjectRef(m, "GeneratorExp", state->GeneratorExp_type) < 0)
         {
+        return -1;
+    }
+    if (PyModule_AddObjectRef(m, "DictInlineContext",
+        state->DictInlineContext_type) < 0) {
         return -1;
     }
     if (PyModule_AddObjectRef(m, "Await", state->Await_type) < 0) {

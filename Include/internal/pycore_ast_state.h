@@ -48,6 +48,7 @@ struct ast_state {
     PyObject *Del_type;
     PyObject *Delete_type;
     PyObject *DictComp_type;
+    PyObject *DictInlineContext_type;
     PyObject *Dict_type;
     PyObject *Div_singleton;
     PyObject *Div_type;

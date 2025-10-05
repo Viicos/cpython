@@ -105,6 +105,11 @@ typedef struct {
 
 typedef struct {
     expr_ty key;
+    expr_ty value;
+} DictInlineContextKvPair;
+
+typedef struct {
+    expr_ty key;
     pattern_ty pattern;
 } KeyPatternPair;
 
@@ -324,6 +329,9 @@ expr_ty _PyPegen_set_expr_context(Parser *, expr_ty, expr_context_ty);
 KeyValuePair *_PyPegen_key_value_pair(Parser *, expr_ty, expr_ty);
 asdl_expr_seq *_PyPegen_get_keys(Parser *, asdl_seq *);
 asdl_expr_seq *_PyPegen_get_values(Parser *, asdl_seq *);
+DictInlineContextKvPair *_PyPegen_dict_inline_kv_pair(Parser *, expr_ty, expr_ty);
+asdl_expr_seq *_PyPegen_get_inline_context_keys(Parser *, asdl_seq *);
+asdl_expr_seq *_PyPegen_get_inline_context_values(Parser *, asdl_seq *);
 KeyPatternPair *_PyPegen_key_pattern_pair(Parser *, expr_ty, pattern_ty);
 asdl_expr_seq *_PyPegen_get_pattern_keys(Parser *, asdl_seq *);
 asdl_pattern_seq *_PyPegen_get_patterns(Parser *, asdl_seq *);

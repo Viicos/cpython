@@ -381,6 +381,51 @@ _PyPegen_get_values(Parser *p, asdl_seq *seq)
     return new_seq;
 }
 
+DictInlineContextKvPair *
+_PyPegen_dict_inline_kv_pair(Parser *p, expr_ty key, expr_ty value)
+{
+    DictInlineContextKvPair *a = _PyArena_Malloc(p->arena, sizeof(DictInlineContextKvPair));
+    if (!a) {
+        return NULL;
+    }
+    a->key = key;
+    a->value = value;
+    return a;
+}
+
+/* Extracts all keys from an asdl_seq* of DictInlineContextKvPair*'s */
+asdl_expr_seq *
+_PyPegen_get_inline_context_keys(Parser *p, asdl_seq *seq)
+{
+    Py_ssize_t len = asdl_seq_LEN(seq);
+    asdl_expr_seq *new_seq = _Py_asdl_expr_seq_new(len, p->arena);
+    if (!new_seq) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < len; i++) {
+        KeyValuePair *pair = asdl_seq_GET_UNTYPED(seq, i);
+        asdl_seq_SET(new_seq, i, pair->key);
+    }
+    return new_seq;
+}
+
+/* Extracts all values from an asdl_seq* of DictInlineContextKvPair*'s */
+asdl_expr_seq *
+_PyPegen_get_inline_context_values(Parser *p, asdl_seq *seq)
+{
+    Py_ssize_t len = asdl_seq_LEN(seq);
+    asdl_expr_seq *new_seq = _Py_asdl_expr_seq_new(len, p->arena);
+    if (!new_seq) {
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < len; i++) {
+        KeyValuePair *pair = asdl_seq_GET_UNTYPED(seq, i);
+        asdl_seq_SET(new_seq, i, pair->value);
+    }
+    return new_seq;
+}
+
+
 /* Constructs a KeyPatternPair that is used when parsing mapping & class patterns */
 KeyPatternPair *
 _PyPegen_key_pattern_pair(Parser *p, expr_ty key, pattern_ty pattern)

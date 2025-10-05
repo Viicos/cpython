@@ -291,6 +291,9 @@ validate_expr(expr_ty exp, expr_context_ty ctx)
         ret = validate_exprs(exp->v.Dict.keys, Load, /*null_ok=*/ 1) &&
             validate_exprs(exp->v.Dict.values, Load, /*null_ok=*/ 0);
         break;
+    case DictInlineContext_kind:
+        ret = 1;
+        break;
     case Set_kind:
         ret = validate_exprs(exp->v.Set.elts, Load, 0);
         break;

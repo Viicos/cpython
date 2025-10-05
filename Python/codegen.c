@@ -3558,6 +3558,14 @@ codegen_dict(compiler *c, expr_ty e)
 }
 
 static int
+codegen_dictinlinecontext(compiler *c, expr_ty e)
+{
+    location loc = LOC(e);
+    ADDOP_I(c, loc, BUILD_MAP, 0);
+    return SUCCESS;
+}
+
+static int
 codegen_compare(compiler *c, expr_ty e)
 {
     location loc = LOC(e);
@@ -5195,6 +5203,8 @@ codegen_visit_expr(compiler *c, expr_ty e)
         return codegen_ifexp(c, e);
     case Dict_kind:
         return codegen_dict(c, e);
+    case DictInlineContext_kind:
+        return codegen_dictinlinecontext(c, e);
     case Set_kind:
         return codegen_set(c, e);
     case GeneratorExp_kind:

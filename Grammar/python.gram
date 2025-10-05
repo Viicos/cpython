@@ -882,11 +882,34 @@ atom[expr_ty]:
     | &'(' (tuple | group | genexp)
     | &'[' (list | listcomp)
     | &'{' (dict | set | dictcomp | setcomp)
+    | &'<' inlinecontext
     | '...' { _PyAST_Constant(Py_Ellipsis, NULL, EXTRA) }
 
 group[expr_ty]:
     | '(' a=(yield_expr | named_expression) ')' { a }
     | invalid_group
+
+# Inline context
+# --------------
+
+inlinecontext[expr_ty]:
+    # | '<' (&'{' dictinlinecontext | &'(' tupleinlinecontext) '>'
+    | '<' &'{' a=dictinlinecontext '>' { a }
+
+dictinlinecontext[expr_ty]:
+    | '{' a=[dictinlinecontextkvpairs] '}' {
+        _PyAST_DictInlineContext(
+            CHECK(asdl_expr_seq*, _PyPegen_get_inline_context_keys(p, a)),
+            CHECK(asdl_expr_seq*, _PyPegen_get_inline_context_values(p, a)),
+            EXTRA
+        )
+    }
+    # | '{' a=dictinlinecontextkvpair b=1
+
+
+dictinlinecontextkvpairs[asdl_seq*]: a=','.dictinlinecontextkvpair+ [','] { a }
+
+dictinlinecontextkvpair[DictInlineContextKvPair*]: a=strings ':' b=expression { _PyPegen_dict_inline_kv_pair(p, a, b) }
 
 # Lambda functions
 # ----------------
