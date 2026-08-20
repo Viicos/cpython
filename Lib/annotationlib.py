@@ -10,8 +10,10 @@ import types
 __all__ = [
     "Format",
     "ForwardRef",
+    "TypeExpr",
     "call_annotate_function",
     "call_evaluate_function",
+    "eval_type_expr",
     "get_annotate_from_class_namespace",
     "get_annotations",
     "annotations_to_string",
@@ -24,6 +26,19 @@ class Format(enum.IntEnum):
     VALUE_WITH_FAKE_GLOBALS = 2
     FORWARDREF = 3
     STRING = 4
+    # The exact source text of the annotation, as stored by the compiler.
+    # Compiler-generated __annotate__ functions support this format natively;
+    # for other annotate functions it falls back to the STRING format, which
+    # reconstructs an approximation of the source.
+    SOURCE = 5
+    # The annotation as an ast.expr node, parsed from the SOURCE format.
+    AST = 6
+    # The annotation evaluated as a *type expression*: the AST is walked with
+    # typing semantics, so syntax that would collapse or fail when evaluated
+    # as a runtime expression (e.g. conditional expressions) is turned into
+    # explicit typing constructs instead. Names are resolved in the scope
+    # where the annotation was written.
+    TYPE_EXPR = 7
 
 
 _sentinel = object()
@@ -363,6 +378,8 @@ class _Stringifier:
             return other.__ast_node__, other.__extra_names__
         elif type(other) is _Template:
             return _template_to_ast(other), None
+        elif isinstance(other, TypeExpr):
+            return ast.TypeExpr(body=other.ast), None
         elif (
             # In STRING format we don't bother with the create_unique_name() dance;
             # it's better to emit the repr() of the object instead of an opaque name.
@@ -718,7 +735,35 @@ def call_annotate_function(annotate, format, *, owner=None, _is_evaluate=False):
         return annotate(format)
     except NotImplementedError:
         pass
-    if format == Format.STRING:
+    if format == Format.SOURCE:
+        # Compiler-generated annotate functions support SOURCE natively (the
+        # call above succeeds); for other annotate functions, fall back to the
+        # STRING format, which reconstructs an approximation of the source.
+        return call_annotate_function(
+            annotate, Format.STRING, owner=owner, _is_evaluate=_is_evaluate
+        )
+    elif format == Format.AST:
+        sources = call_annotate_function(
+            annotate, Format.SOURCE, owner=owner, _is_evaluate=_is_evaluate
+        )
+        if _is_evaluate:
+            return _parse_type_expr_source(sources)
+        return {
+            name: _parse_type_expr_source(source)
+            for name, source in sources.items()
+        }
+    elif format == Format.TYPE_EXPR:
+        sources = call_annotate_function(
+            annotate, Format.SOURCE, owner=owner, _is_evaluate=_is_evaluate
+        )
+        lookup = _make_annotate_lookup(annotate, owner)
+        if _is_evaluate:
+            return _eval_type_expr_source(sources, lookup)
+        return {
+            name: _eval_type_expr_source(source, lookup)
+            for name, source in sources.items()
+        }
+    elif format == Format.STRING:
         # STRING is implemented by calling the annotate function in a special
         # environment where every name lookup results in an instance of _Stringifier.
         # _Stringifier supports every dunder operation and returns a new _Stringifier.
@@ -902,6 +947,223 @@ def get_annotate_from_class_namespace(obj):
         return obj.get("__annotate_func__", None)
 
 
+def _parse_type_expr_source(source):
+    """Parse an annotation source string into an ast.expr node."""
+    if not isinstance(source, str):
+        raise TypeError(
+            f"expected annotation source to be a string, got {source!r}"
+        )
+    if source.lstrip().startswith("*"):
+        # Star-unpacked annotations (e.g. *Ts) are not valid on their own;
+        # wrap them in a tuple display to parse, then unwrap.
+        return ast.parse(f"({source},)", "<type expression>", "eval").body.elts[0]
+    return ast.parse(source, "<type expression>", "eval").body
+
+
+def _make_annotate_lookup(annotate, owner=None):
+    """Return a callable resolving names in the scope where the annotations
+    wrapped by *annotate* were written.
+
+    The lookup approximates the name resolution the interpreter performs
+    when the annotate function runs: the class namespace (for annotations
+    defined in a class body), then names closed over from enclosing scopes
+    (including type parameters), then the module globals, then builtins.
+    """
+    globals_ = getattr(annotate, "__globals__", None) or {}
+    builtins_ = getattr(annotate, "__builtins__", None)
+    if builtins_ is None:
+        builtins_ = builtins.__dict__
+    freevars = {}
+    closure = getattr(annotate, "__closure__", None)
+    if closure:
+        for name, cell in zip(
+            annotate.__code__.co_freevars, closure, strict=True
+        ):
+            try:
+                freevars[name] = cell.cell_contents
+            except ValueError:
+                pass
+    classdict = freevars.pop("__classdict__", None)
+    if classdict is None and isinstance(owner, type):
+        classdict = getattr(owner, "__dict__", None)
+
+    def lookup(name):
+        if classdict is not None:
+            try:
+                return classdict[name]
+            except KeyError:
+                pass
+        if name in freevars:
+            return freevars[name]
+        if name in globals_:
+            return globals_[name]
+        try:
+            return builtins_[name]
+        except KeyError:
+            raise NameError(
+                _NAME_ERROR_MSG.format(name=name), name=name
+            ) from None
+
+    return lookup
+
+
+def _namespace_lookup(globals=None, locals=None):
+    def lookup(name):
+        if locals is not None and name in locals:
+            return locals[name]
+        if globals is not None and name in globals:
+            return globals[name]
+        try:
+            return builtins.__dict__[name]
+        except KeyError:
+            raise NameError(
+                _NAME_ERROR_MSG.format(name=name), name=name
+            ) from None
+
+    return lookup
+
+
+def _eval_type_expr_source(source, lookup):
+    node = _parse_type_expr_source(source)
+    return _eval_type_expr_node(node, lookup, toplevel=True)
+
+
+def _eval_type_expr_node(node, lookup, toplevel=False):
+    """Evaluate an annotation AST with type expression semantics.
+
+    Most syntax evaluates the way regular expressions do, except that name
+    resolution goes through *lookup* and that syntax reserved for type
+    manipulation is turned into explicit typing constructs rather than being
+    evaluated (and collapsing) at runtime. Currently the only such construct
+    is the conditional expression, which produces typing.ConditionalType.
+    """
+    recurse = _eval_type_expr_node
+    match node:
+        case ast.Name(id=name):
+            return lookup(name)
+        case ast.Constant(value=value):
+            # A string constant that makes up the entire annotation is a
+            # stringized annotation; evaluate its contents instead. Nested
+            # strings (e.g. Literal values) are left untouched.
+            if toplevel and isinstance(value, str):
+                return _eval_type_expr_source(value, lookup)
+            return value
+        case ast.Attribute(value=value, attr=attr):
+            return getattr(recurse(value, lookup), attr)
+        case ast.Subscript(value=value, slice=slice_):
+            origin = recurse(value, lookup)
+            if isinstance(slice_, ast.Tuple):
+                args = tuple(recurse(elt, lookup) for elt in slice_.elts)
+            else:
+                args = recurse(slice_, lookup)
+            return origin[args]
+        case ast.BinOp(left=left, op=ast.BitOr(), right=right):
+            import typing
+
+            return typing.Union[recurse(left, lookup), recurse(right, lookup)]
+        case ast.IfExp(test=test, body=body, orelse=orelse):
+            # In a type expression, a conditional expression is not evaluated
+            # for its (runtime) truth value; it describes a type that type
+            # checkers resolve based on the condition.
+            import typing
+
+            return typing.ConditionalType(
+                recurse(body, lookup),
+                recurse(orelse, lookup),
+                recurse(test, lookup),
+            )
+        case ast.TypeExpr(body=body):
+            # Backtick displays are transparent inside a type expression:
+            # the surrounding context is already evaluated with TYPE_EXPR
+            # semantics.
+            return recurse(body, lookup)
+        case ast.Starred(value=value):
+            import typing
+
+            return typing.Unpack[recurse(value, lookup)]
+        case ast.Tuple(elts=elts):
+            return tuple(recurse(elt, lookup) for elt in elts)
+        case ast.List(elts=elts):
+            return [recurse(elt, lookup) for elt in elts]
+        case ast.Call(func=func, args=args, keywords=keywords):
+            # Calls appear in valid annotations (e.g. inside Annotated
+            # metadata); evaluate them as regular calls.
+            return recurse(func, lookup)(
+                *(recurse(arg, lookup) for arg in args),
+                **{kw.arg: recurse(kw.value, lookup) for kw in keywords},
+            )
+        case _:
+            raise SyntaxError(
+                "invalid syntax in type expression: "
+                f"{ast.unparse(node)!r}"
+            )
+
+
+def eval_type_expr(expr, *, globals=None, locals=None):
+    """Evaluate a type expression with TYPE_EXPR semantics.
+
+    *expr* may be a string, an ast.expr node, or a TypeExpr object. Names are
+    resolved in the given *globals* and *locals* namespaces (for a TypeExpr
+    object, the scope captured at creation time is used instead), falling back
+    to builtins.
+    """
+    if isinstance(expr, TypeExpr):
+        return expr.evaluate(format=Format.TYPE_EXPR)
+    lookup = _namespace_lookup(globals, locals)
+    if isinstance(expr, str):
+        return _eval_type_expr_source(expr, lookup)
+    elif isinstance(expr, ast.expr):
+        return _eval_type_expr_node(expr, lookup, toplevel=True)
+    else:
+        raise TypeError(
+            "eval_type_expr() argument must be a string, ast.expr, or "
+            f"TypeExpr, not {type(expr).__name__}"
+        )
+
+
+class TypeExpr:
+    """Runtime representation of a backtick-delimited type expression.
+
+    Instances are created by the interpreter when a ```...``` display is
+    evaluated. The enclosed expression is not evaluated at that point; it is
+    stored as a lazy evaluation function (with its source text) so that it
+    can later be resolved with any Format, most notably TYPE_EXPR.
+    """
+
+    __slots__ = ("__evaluate_func__",)
+
+    def __init__(self, evaluate_func):
+        self.__evaluate_func__ = evaluate_func
+
+    @property
+    def source(self):
+        """The source text of the enclosed expression."""
+        return call_evaluate_function(self.__evaluate_func__, Format.SOURCE)
+
+    @property
+    def ast(self):
+        """The enclosed expression as an ast.expr node."""
+        return call_evaluate_function(self.__evaluate_func__, Format.AST)
+
+    def evaluate(self, format=Format.TYPE_EXPR):
+        """Resolve the type expression in the scope where it was written."""
+        return call_evaluate_function(self.__evaluate_func__, format)
+
+    def __repr__(self):
+        try:
+            return f"<TypeExpr `{self.source}`>"
+        except Exception:
+            return "<TypeExpr>"
+
+    def __eq__(self, other):
+        if not isinstance(other, TypeExpr):
+            return NotImplemented
+        return self.source == other.source
+
+    def __hash__(self):
+        return hash((TypeExpr, self.source))
+
+
 def get_annotations(
     obj, *, globals=None, locals=None, eval_str=False, format=Format.VALUE
 ):
@@ -992,6 +1254,45 @@ def get_annotations(
             ann = _get_dunder_annotations(obj)
             if ann is not None:
                 return annotations_to_string(ann)
+        case Format.SOURCE:
+            ann = _get_and_call_annotate(obj, format)
+            if ann is not None:
+                return dict(ann)
+            ann = _get_dunder_annotations(obj)
+            if ann is not None:
+                return annotations_to_string(ann)
+        case Format.AST:
+            ann = _get_and_call_annotate(obj, format)
+            if ann is not None:
+                return dict(ann)
+            ann = _get_dunder_annotations(obj)
+            if ann is not None:
+                # Annotations that are strings (e.g. under
+                # "from __future__ import annotations") can be parsed;
+                # already-evaluated values are returned unchanged.
+                return {
+                    name: _parse_type_expr_source(value)
+                    if isinstance(value, str)
+                    else value
+                    for name, value in ann.items()
+                }
+        case Format.TYPE_EXPR:
+            ann = _get_and_call_annotate(obj, format)
+            if ann is not None:
+                return dict(ann)
+            # No __annotate__ function is available (e.g. under
+            # "from __future__ import annotations"): values that are already
+            # evaluated are returned unchanged, and stringized annotations
+            # are evaluated with TYPE_EXPR semantics in the namespaces that
+            # get_annotations() would use for eval_str=True.
+            ann = _get_dunder_annotations(obj)
+            if ann is not None and any(
+                isinstance(value, str) for value in ann.values()
+            ):
+                raise NotImplementedError(
+                    "the TYPE_EXPR format is not implemented for stringized "
+                    "annotations without an __annotate__ function"
+                )
         case Format.VALUE_WITH_FAKE_GLOBALS:
             raise ValueError("The VALUE_WITH_FAKE_GLOBALS format is for internal use only")
         case _:
@@ -1093,6 +1394,8 @@ def type_repr(value):
         if value.__module__ == "builtins":
             return value.__qualname__
         return f"{value.__module__}.{value.__qualname__}"
+    elif isinstance(value, TypeExpr):
+        return f"`{value.source}`"
     elif isinstance(value, _Template):
         tree = _template_to_ast(value)
         return ast.unparse(tree)

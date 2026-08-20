@@ -2616,6 +2616,26 @@ symtable_visit_expr(struct symtable *st, expr_ty e)
     case TemplateStr_kind:
         VISIT_SEQ(st, expr, e->v.TemplateStr.values);
         break;
+    case TypeExpr_kind: {
+        // Backtick type expressions are compiled to lazily-called evaluate
+        // functions, like the value of a type alias.
+        int can_see_class_scope = (st->st_cur->ste_type == ClassBlock
+                                   || st->st_cur->ste_can_see_class_scope);
+        _Py_DECLARE_STR(anon_typeexpr, "<type expr>");
+        if (!symtable_enter_block(st, &_Py_STR(anon_typeexpr), TypeAliasBlock,
+                                  (void *)e, LOCATION(e))) {
+            return 0;
+        }
+        st->st_cur->ste_can_see_class_scope = can_see_class_scope;
+        if (can_see_class_scope
+            && !symtable_add_def(st, &_Py_ID(__classdict__), USE, LOCATION(e))) {
+            return 0;
+        }
+        VISIT(st, expr, e->v.TypeExpr.body);
+        if (!symtable_exit_block(st))
+            return 0;
+        break;
+    }
     case Constant_kind:
         /* Nothing to do here. */
         break;

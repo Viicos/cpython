@@ -632,6 +632,9 @@ astfold_expr(expr_ty node_, PyArena *ctx_, _PyASTPreprocessState *state)
     case NamedExpr_kind:
         CALL(astfold_expr, expr_ty, node_->v.NamedExpr.value);
         break;
+    case TypeExpr_kind:
+        CALL(astfold_expr, expr_ty, node_->v.TypeExpr.body);
+        break;
     case Constant_kind:
         // Already a constant, nothing further to do
         break;

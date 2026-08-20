@@ -1054,6 +1054,12 @@ class Unparser(NodeVisitor):
             self.write("=")
         self.traverse(node.value)
 
+    def visit_TypeExpr(self, node):
+        self.write("`")
+        self.set_precedence(_Precedence.TEST, node.body)
+        self.traverse(node.body)
+        self.write("`")
+
     def visit_Lambda(self, node):
         with self.require_parens(_Precedence.TEST, node):
             self.write("lambda")

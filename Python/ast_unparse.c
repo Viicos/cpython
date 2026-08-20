@@ -981,6 +981,10 @@ append_ast_expr(PyUnicodeWriter *writer, expr_ty e, int level)
             return -1;
         }
         return append_ast_constant(writer, e->v.Constant.value);
+    case TypeExpr_kind:
+        APPEND_STR("`");
+        APPEND_EXPR(e->v.TypeExpr.body, PR_TEST);
+        APPEND_STR_FINISH("`");
     case JoinedStr_kind:
         return append_joinedstr(writer, e, false);
     case TemplateStr_kind:

@@ -344,6 +344,9 @@ validate_expr(expr_ty exp, expr_context_ty ctx)
         }
         ret = 1;
         break;
+    case TypeExpr_kind:
+        ret = validate_expr(exp->v.TypeExpr.body, Load);
+        break;
     case JoinedStr_kind:
         ret = validate_exprs(exp->v.JoinedStr.values, Load, 0);
         break;

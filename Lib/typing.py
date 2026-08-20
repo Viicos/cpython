@@ -50,6 +50,8 @@ __all__ = [
     # Super-special typing primitives.
     'Annotated',
     'Any',
+    'AssignableTo',
+    'ConditionalType',
     'Callable',
     'ClassVar',
     'Concatenate',
@@ -2394,6 +2396,87 @@ def assert_type(val, typ, /):
             assert_type(name, int)  # type checker error
     """
     return val
+
+
+class ConditionalType:
+    """Demonstration construct for the TYPE_EXPR annotation format.
+
+    Represents a type that resolves to *if_true* when *condition* holds, and
+    to *if_false* otherwise. It is produced by evaluating a conditional
+    expression (``X if C else Y``) in a type expression context::
+
+        def f(x: float) -> `int if AssignableTo[float, int] else str`: ...
+
+    It is not meant to be written directly in source code. When a conditional
+    expression in an annotation is evaluated as a regular runtime expression
+    (the VALUE format), it collapses to one of its branches instead.
+    """
+
+    __slots__ = ("if_true", "if_false", "condition")
+
+    def __init__(self, if_true, if_false, condition):
+        self.if_true = if_true
+        self.if_false = if_false
+        self.condition = condition
+
+    def __repr__(self):
+        return (
+            f"ConditionalType(if_true={_type_repr(self.if_true)}, "
+            f"if_false={_type_repr(self.if_false)}, "
+            f"condition={self.condition!r})"
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, ConditionalType):
+            return NotImplemented
+        return (
+            self.if_true == other.if_true
+            and self.if_false == other.if_false
+            and self.condition == other.condition
+        )
+
+    def __hash__(self):
+        return hash((ConditionalType, self.if_true, self.if_false,
+                     self.condition))
+
+
+class AssignableTo:
+    """Demonstration special form for the TYPE_EXPR annotation format.
+
+    ``AssignableTo[source, target]`` describes the condition that *source* is
+    assignable to *target*, for use as the condition of a conditional type
+    expression. Instances are truthy, so that a conditional annotation
+    evaluated as a regular runtime expression (the VALUE format) collapses to
+    its first branch.
+    """
+
+    __slots__ = ("source", "target")
+
+    def __init__(self, source, target):
+        self.source = source
+        self.target = target
+
+    def __class_getitem__(cls, item):
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError(
+                "AssignableTo[...] requires exactly two arguments "
+                "(source, target)"
+            )
+        return cls(*item)
+
+    def __repr__(self):
+        return (
+            f"AssignableTo[{_type_repr(self.source)}, "
+            f"{_type_repr(self.target)}]"
+        )
+
+    def __eq__(self, other):
+        if not isinstance(other, AssignableTo):
+            return NotImplemented
+        return self.source == other.source and self.target == other.target
+
+    def __hash__(self):
+        return hash((AssignableTo, self.source, self.target))
 
 
 def get_type_hints(obj, globalns=None, localns=None, include_extras=False,

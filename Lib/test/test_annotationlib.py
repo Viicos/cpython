@@ -1,5 +1,6 @@
 """Tests for the annotations module."""
 
+import ast
 import textwrap
 import annotationlib
 import builtins
@@ -698,10 +699,22 @@ class TestGetAnnotations(unittest.TestCase):
             if format == Format.VALUE_WITH_FAKE_GLOBALS:
                 continue
             with self.subTest(format=format):
-                self.assertEqual(
-                    get_annotations(foo, format=format),
-                    {"a": "foo", "b": "str"},
-                )
+                if format == Format.AST:
+                    # Stringized annotations are parsed into AST nodes.
+                    ann = get_annotations(foo, format=format)
+                    self.assertEqual(set(ann), {"a", "b"})
+                    self.assertIsInstance(ann["a"], ast.Name)
+                    self.assertIsInstance(ann["b"], ast.Name)
+                elif format == Format.TYPE_EXPR:
+                    # Not supported for stringized annotations without an
+                    # __annotate__ function.
+                    with self.assertRaises(NotImplementedError):
+                        get_annotations(foo, format=format)
+                else:
+                    self.assertEqual(
+                        get_annotations(foo, format=format),
+                        {"a": "foo", "b": "str"},
+                    )
 
         self.assertEqual(
             get_annotations(foo, eval_str=True, locals=locals()),
@@ -1624,7 +1637,7 @@ class TestCallAnnotateFunction(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             # Some non-Format value
-            annotationlib.call_annotate_function(annotate, 7)
+            annotationlib.call_annotate_function(annotate, 8)
 
     def test_basic_non_function_annotate(self):
         class Annotate:

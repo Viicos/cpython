@@ -216,6 +216,24 @@ make_frozenset(PyThreadState* Py_UNUSED(ignored), PyObject *set)
     return _PySet_Freeze(set);
 }
 
+static PyObject *
+build_type_expr(PyThreadState* Py_UNUSED(ignored), PyObject *evaluate_func)
+{
+    assert(PyFunction_Check(evaluate_func));
+    PyObject *mod = PyImport_ImportModule("annotationlib");
+    if (mod == NULL) {
+        return NULL;
+    }
+    PyObject *cls = PyObject_GetAttrString(mod, "TypeExpr");
+    Py_DECREF(mod);
+    if (cls == NULL) {
+        return NULL;
+    }
+    PyObject *result = PyObject_CallOneArg(cls, evaluate_func);
+    Py_DECREF(cls);
+    return result;
+}
+
 
 #define INTRINSIC_FUNC_ENTRY(N, F) \
     [N] = {F, #N},
@@ -235,6 +253,7 @@ _PyIntrinsics_UnaryFunctions[] = {
     INTRINSIC_FUNC_ENTRY(INTRINSIC_SUBSCRIPT_GENERIC, _Py_subscript_generic)
     INTRINSIC_FUNC_ENTRY(INTRINSIC_TYPEALIAS, _Py_make_typealias)
     INTRINSIC_FUNC_ENTRY(INTRINSIC_BUILD_FROZENSET, make_frozenset)
+    INTRINSIC_FUNC_ENTRY(INTRINSIC_BUILD_TYPE_EXPR, build_type_expr)
 };
 
 

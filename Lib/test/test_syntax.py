@@ -113,7 +113,7 @@ SyntaxError: cannot assign to ellipsis here. Maybe you meant '==' instead of '='
 
 >>> `1` = 1
 Traceback (most recent call last):
-SyntaxError: invalid syntax
+SyntaxError: cannot assign to type expression here. Maybe you meant '==' instead of '='?
 
 If the left-hand side of an assignment is a list or tuple, an illegal
 expression inside that contain should still cause a syntax error.

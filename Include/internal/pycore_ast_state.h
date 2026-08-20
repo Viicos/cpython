@@ -143,6 +143,7 @@ struct ast_state {
     PyObject *Try_type;
     PyObject *Tuple_type;
     PyObject *TypeAlias_type;
+    PyObject *TypeExpr_type;
     PyObject *TypeIgnore_type;
     PyObject *TypeVarTuple_type;
     PyObject *TypeVar_type;

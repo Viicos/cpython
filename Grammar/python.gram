@@ -902,6 +902,7 @@ atom[expr_ty]:
     | &'(' (genexp | tuple | group)
     | &'[' (listcomp | list)
     | &'{' (dictcomp | setcomp | dict | set)
+    | '`' a=expression '`' { _PyAST_TypeExpr(a, EXTRA) }
     | '...' { _PyAST_Constant(Py_Ellipsis, NULL, EXTRA) }
 
 group[expr_ty]:
